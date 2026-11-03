@@ -473,11 +473,16 @@ function sleuthVals(p, gid) {
   var clone = function (o) { return JSON.parse(JSON.stringify(o)); };
   var N = 0;
 
+  // fit=stretch (sent by the HUD): fill the whole media window even if Second Life gives us a
+  // square one; the screen prim's shape un-squishes it. Otherwise keep the shape and center it.
+  var STRETCH = Q.get('fit') === 'stretch';
   function fit() {
     var w = VIEW === 'pill' ? 400 : 720, h = VIEW === 'pill' ? 100 : 960;
     w /= ZOOM; h /= ZOOM;
     stage.style.width = w + 'px'; stage.style.height = h + 'px';
-    var k = Math.min(window.innerWidth / w, window.innerHeight / h) || 1;
+    var kx = window.innerWidth / w || 1, ky = window.innerHeight / h || 1;
+    if (STRETCH) { stage.style.transform = 'scale(' + kx + ',' + ky + ')'; return; }
+    var k = Math.min(kx, ky);
     stage.style.transform = 'translate(' + (window.innerWidth - w * k) / 2 + 'px,' + (window.innerHeight - h * k) / 2 + 'px) scale(' + k + ')';
   }
   window.addEventListener('resize', fit);
@@ -491,16 +496,35 @@ function sleuthVals(p, gid) {
     toastTimer = setTimeout(function () { el.className = bad ? 'bad' : ''; }, 3600);
   }
 
+  // Talks to the Apps Script backend with JSONP (a script tag), which works from
+  // GitHub Pages inside Second Life without any cross-site blocking.
+  var CALLS = 0;
   function api(fn, args) {
     if (!API) return Promise.resolve({ ok: false, error: 'This page needs to be opened from the HUD.' });
-    return fetch(API, { method: 'POST', body: JSON.stringify({ fn: fn, token: T, args: args || [] }) })
-      .then(function (r) { return r.json(); })
-      .catch(function () { return { ok: false, error: 'Couldn\'t reach the Society office. Try again in a moment.' }; });
+    return new Promise(function (resolve) {
+      var cb = '__jss' + (++CALLS) + Date.now().toString(36);
+      var s = document.createElement('script');
+      var done = false;
+      var finish = function (r) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { delete window[cb]; } catch (e) { window[cb] = undefined; }
+        if (s.parentNode) s.parentNode.removeChild(s);
+        resolve(r && typeof r === 'object' ? r : { ok: false, error: 'Something went wrong. Try again in a moment.' });
+      };
+      var timer = setTimeout(function () { finish({ ok: false, error: 'The Society office is slow right now. Try again in a moment.' }); }, 25000);
+      window[cb] = finish;
+      s.onerror = function () { finish({ ok: false, error: 'Couldn\'t reach the Society office. Try again in a moment.' }); };
+      s.src = API + (API.indexOf('?') === -1 ? '?' : '&') + 'fn=' + encodeURIComponent(fn) + '&token=' + encodeURIComponent(T) +
+        '&args=' + encodeURIComponent(JSON.stringify(args || [])) + '&callback=' + cb + '&_=' + Date.now();
+      document.head.appendChild(s);
+    });
   }
 
   function tellHud(msg) {
     if (!HUD) { toast('Tap the button on your HUD to close.'); return; }
-    try { fetch(HUD, { method: 'POST', mode: 'no-cors', body: msg }); } catch (e) {}
+    try { (new Image()).src = HUD + '?do=' + encodeURIComponent(msg) + '&_=' + Date.now(); } catch (e) {}
   }
 
   /* ============ sleuth drawing ============ */
